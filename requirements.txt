@@ -1,1 +1,6 @@
 beautifulsoup4
+torch
+numpy
+pandas
+cuber
+tqdm
