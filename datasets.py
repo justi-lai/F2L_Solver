@@ -191,31 +191,448 @@ class AdvancedCurriculumDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.data[idx]
+
+
+class MultiMoveDataset(Dataset):
+    """
+    Dataset for multi-move sequence training.
     
-    def update_curriculum(self, epoch: int, total_epochs: int):
-        """Update curriculum parameters and regenerate data if difficulty changed."""
-        self.current_epoch = epoch
-        progress = epoch / total_epochs
+    Each sample contains:
+    - initial_state: 54 sticker colors (tokenized)
+    - move_sequence: sequence of moves (tokenized)
+    - final_state: resulting 54 sticker colors after all moves (tokenized)
+    """
+    
+    def __init__(self, length: int, min_seq_length: int = 2, max_seq_length: int = 8, seed: int = 42):
+        """
+        Initialize multi-move dataset.
         
-        old_max_scramble = self.max_scramble
+        Args:
+            length: Number of samples to generate
+            min_seq_length: Minimum number of moves in sequence
+            max_seq_length: Maximum number of moves in sequence
+            seed: Random seed for reproducibility
+        """
+        self.len = length
+        self.min_seq_length = min_seq_length
+        self.max_seq_length = max_seq_length
+        self.seed = seed
         
-        if self.difficulty_progression == "linear":
-            # Linear progression from min to max scramble length
-            self.max_scramble = max(self.min_scramble + 1, self.min_scramble + int(progress * (self.target_max_scramble - self.min_scramble)))
-        elif self.difficulty_progression == "exponential":
-            # Exponential progression - stays easy longer, then ramps up quickly
-            self.max_scramble = max(self.min_scramble + 1, self.min_scramble + int((progress ** 2) * (self.target_max_scramble - self.min_scramble)))
-        elif self.difficulty_progression == "stepped":
-            # Stepped progression - increases every few epochs
-            steps = max(1, total_epochs // 10)  # 10 difficulty steps
-            step_size = (self.target_max_scramble - self.min_scramble) / steps
-            current_step = min(steps - 1, epoch // (total_epochs // steps))
-            self.max_scramble = max(self.min_scramble + 1, self.min_scramble + int(current_step * step_size))
+        print(f"Generating {length:,} multi-move samples (sequences: {min_seq_length}-{max_seq_length} moves, seed: {seed})...")
         
-        # Only regenerate data if difficulty actually changed
-        if self.max_scramble != old_max_scramble:
-            print(f"🔄 Curriculum difficulty updated: {old_max_scramble} → {self.max_scramble}")
+        # Set seed for reproducibility
+        np.random.seed(seed)
+        
+        # Get move tokens (exclude color tokens)
+        all_tokens = list(VOCAB.keys())
+        self.move_tokens = [token for token in all_tokens if token not in ['WHITE', 'YELLOW', 'GREEN', 'BLUE', 'RED', 'ORANGE']]
+        
+        # Pre-generate ALL data
+        self.data = []
+        
+        # Generate in batches for memory efficiency
+        batch_size = min(100, length)
+        
+        with tqdm(total=length, desc="Generating multi-move dataset") as pbar:
+            for start_idx in range(0, length, batch_size):
+                end_idx = min(start_idx + batch_size, length)
+                batch_length = end_idx - start_idx
+                
+                # Generate raw data batch
+                raw_batch = self._generate_batch(batch_length)
+                
+                # Process and store each sample
+                for initial_state, move_sequence, final_state in raw_batch:
+                    # Tokenize initial state
+                    initial_tensor = np.array([VOCAB[COLOR_MAP[face]] for face in initial_state.split(" ")])
+                    
+                    # Tokenize move sequence
+                    move_tensors = np.array([VOCAB[move] for move in move_sequence])
+                    
+                    # Tokenize final state
+                    final_tensor = np.array([VOCAB[COLOR_MAP[face]] for face in final_state.split(" ")])
+                    
+                    # Store as tensors
+                    self.data.append((
+                        torch.tensor(initial_tensor, dtype=torch.long),
+                        torch.tensor(move_tensors, dtype=torch.long),
+                        torch.tensor(final_tensor, dtype=torch.long)
+                    ))
+                
+                pbar.update(batch_length)
+        
+        print(f"Multi-move dataset created with {len(self.data):,} consistent samples")
+        
+        # Show sequence length distribution
+        seq_lengths = [len(self.data[i][1]) for i in range(min(100, len(self.data)))]
+        print(f"   Sample sequence lengths: min={min(seq_lengths)}, max={max(seq_lengths)}, avg={np.mean(seq_lengths):.1f}")
+    
+    def _generate_batch(self, batch_size: int):
+        """Generate a batch of multi-move samples."""
+        from cuber.cuber import Cube
+        from data_generation.cube_state_gen import generate_random_scramble
+        
+        batch_data = []
+        
+        for _ in range(batch_size):
+            # Random sequence length
+            seq_length = np.random.randint(self.min_seq_length, self.max_seq_length + 1)
+            
+            # Generate initial scramble
+            initial_scramble_length = np.random.randint(5, 20)
+            initial_scramble = generate_random_scramble(initial_scramble_length)
+            
+            # Create cube and apply initial scramble
+            cube = Cube()
+            cube.turn(initial_scramble)
+            initial_state = cube.get_faces_str("ULFRBD")
+            
+            # Generate and apply move sequence
+            move_sequence = []
+            for _ in range(seq_length):
+                move = np.random.choice(self.move_tokens)
+                move_sequence.append(move)
+                cube.turn(move)
+            
+            final_state = cube.get_faces_str("ULFRBD")
+            
+            batch_data.append((initial_state, move_sequence, final_state))
+        
+        return batch_data
+    
+    def __len__(self):
+        return self.len
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
+    
+    def get_max_sequence_length(self):
+        """Get the maximum sequence length in the dataset."""
+        return max(len(item[1]) for item in self.data)
+
+
+class CurriculumMultiMoveDataset(Dataset):
+    """
+    Curriculum learning version of multi-move dataset.
+    
+    Starts with shorter sequences and gradually increases difficulty.
+    Uses smarter curriculum progression for better learning.
+    """
+    
+    def __init__(self, length: int, initial_max_length: int = 2, final_max_length: int = 8, seed: int = 42):
+        """
+        Initialize curriculum multi-move dataset.
+        
+        Args:
+            length: Number of samples to generate
+            initial_max_length: Starting maximum sequence length
+            final_max_length: Final maximum sequence length
+            seed: Random seed for reproducibility
+        """
+        self.len = length
+        self.initial_max_length = initial_max_length
+        self.final_max_length = final_max_length
+        self.current_max_length = initial_max_length
+        self.seed = seed
+        
+        print(f"Creating curriculum multi-move dataset:")
+        print(f"   Samples: {length:,}")
+        print(f"   Curriculum: {initial_max_length} → {final_max_length} moves")
+        print(f"   Seed: {seed}")
+        
+        # Get move tokens
+        all_tokens = list(VOCAB.keys())
+        self.move_tokens = [token for token in all_tokens if token not in ['WHITE', 'YELLOW', 'GREEN', 'BLUE', 'RED', 'ORANGE']]
+        
+        # Generate initial dataset
+        self._regenerate_data()
+    
+    def _regenerate_data(self):
+        """Regenerate data based on current curriculum difficulty."""
+        np.random.seed(self.seed + hash(str(self.current_max_length)) % 10000)
+        
+        print(f"Generating data with max sequence length: {self.current_max_length}")
+        
+        self.data = []
+        
+        with tqdm(total=self.len, desc=f"Curriculum generation (max_len={self.current_max_length})") as pbar:
+            batch_size = 100
+            for start_idx in range(0, self.len, batch_size):
+                end_idx = min(start_idx + batch_size, self.len)
+                batch_length = end_idx - start_idx
+                
+                raw_batch = self._generate_curriculum_batch(batch_length)
+                
+                for initial_state, move_sequence, final_state in raw_batch:
+                    initial_tensor = np.array([VOCAB[COLOR_MAP[face]] for face in initial_state.split(" ")])
+                    move_tensors = np.array([VOCAB[move] for move in move_sequence])
+                    final_tensor = np.array([VOCAB[COLOR_MAP[face]] for face in final_state.split(" ")])
+                    
+                    self.data.append((
+                        torch.tensor(initial_tensor, dtype=torch.long),
+                        torch.tensor(move_tensors, dtype=torch.long),
+                        torch.tensor(final_tensor, dtype=torch.long)
+                    ))
+                
+                pbar.update(batch_length)
+    
+    def _generate_curriculum_batch(self, batch_size: int):
+        """Generate batch based on current curriculum level with intermediate states."""
+        from cuber.cuber import Cube
+        from data_generation.cube_state_gen import generate_random_scramble
+        
+        batch_data = []
+        
+        for _ in range(batch_size):
+            # ENHANCED: Curriculum with knowledge retention
+            # Sample from all difficulties learned so far, with more weight on current level
+            seq_length = self._sample_sequence_length_with_retention()
+            
+            # Generate initial state
+            initial_scramble_length = np.random.randint(5, 15)
+            initial_scramble = generate_random_scramble(initial_scramble_length)
+            
+            cube = Cube()
+            cube.turn(initial_scramble)
+            initial_state = cube.get_faces_str("ULFRBD")
+            
+            # Generate move sequence (back to fast generation)
+            move_sequence = []
+            for _ in range(seq_length):
+                move = np.random.choice(self.move_tokens)
+                move_sequence.append(move)
+                cube.turn(move)
+            
+            final_state = cube.get_faces_str("ULFRBD")
+            # Store simple format for speed
+            batch_data.append((initial_state, move_sequence, final_state))
+        
+        return batch_data
+    
+    def _sample_sequence_length_with_retention(self):
+        """
+        Sample sequence length with knowledge retention and diversity.
+        
+        Distribution ensures diversity across all learned sequence lengths:
+        - 40% current max difficulty
+        - 25% immediate previous difficulties 
+        - 20% older difficulties
+        - 15% uniform diversity across all lengths
+        """
+        if self.current_max_length == 1:
+            return 1
+        
+        rand_val = np.random.random()
+        
+        if rand_val < 0.4:
+            # 40% current max difficulty
+            return self.current_max_length
+        elif rand_val < 0.65:
+            # 25% immediate previous difficulties (current-1 to current-2)
+            if self.current_max_length >= 2:
+                lower_bound = max(1, self.current_max_length - 2)
+                upper_bound = self.current_max_length
+                return np.random.randint(lower_bound, upper_bound)
+            else:
+                return 1
+        elif rand_val < 0.85:
+            # 20% older difficulties (1 to current-3)
+            if self.current_max_length >= 4:
+                return np.random.randint(1, max(2, self.current_max_length - 2))
+            elif self.current_max_length >= 2:
+                return 1
+            else:
+                return 1
+        else:
+            # 15% uniform diversity - ensures all sequence lengths get representation
+            return np.random.randint(1, self.current_max_length + 1)
+    
+    def update_curriculum(self, progress_ratio: float):
+        """
+        Update curriculum difficulty based on training progress.
+        
+        Args:
+            progress_ratio: Training progress (0.0 to 1.0)
+        """
+        # IMPROVED: Smoother curriculum progression
+        new_max_length = int(self.initial_max_length + 
+                           (self.final_max_length - self.initial_max_length) * progress_ratio)
+        
+        if new_max_length != self.current_max_length:
+            self.current_max_length = new_max_length
             self._regenerate_data()
+            return True
+        return False
+    
+    def get_current_curriculum_range(self):
+        """Get the current sequence length range for eval dataset alignment."""
+        if self.current_max_length == 1:
+            return 1, 1
+        else:
+            return max(1, self.current_max_length - 1), self.current_max_length
+    
+    def __len__(self):
+        return self.len
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
+    
+    def get_max_sequence_length(self):
+        """Get the current maximum sequence length."""
+        return self.current_max_length
+
+
+class AlignedEvalMultiMoveDataset(Dataset):
+    """
+    Evaluation dataset that aligns with the curriculum training dataset.
+    
+    This dataset dynamically adjusts its sequence length distribution
+    to match the current curriculum level of the training dataset.
+    """
+    
+    def __init__(self, length: int, train_dataset=None, seed: int = 999):
+        """
+        Initialize aligned evaluation dataset.
+        
+        Args:
+            length: Number of samples to generate
+            train_dataset: Training dataset to align with (optional, can align later)
+            seed: Random seed for reproducibility
+        """
+        self.len = length
+        self.seed = seed
+        self.current_min_length = 1
+        self.current_max_length = 1
+        
+        print(f"Creating aligned evaluation multi-move dataset:")
+        print(f"   Samples: {length:,}")
+        print(f"   Will align with training curriculum dynamically")
+        print(f"   Seed: {seed}")
+        
+        # Get move tokens
+        all_tokens = list(VOCAB.keys())
+        self.move_tokens = [token for token in all_tokens if token not in ['WHITE', 'YELLOW', 'GREEN', 'BLUE', 'RED', 'ORANGE']]
+        
+        # Initialize data
+        self.data = []
+        
+        # If training dataset provided, align immediately, otherwise use default
+        if train_dataset is not None and hasattr(train_dataset, 'get_current_curriculum_range'):
+            self.current_min_length, self.current_max_length = train_dataset.get_current_curriculum_range()
+        
+        self._regenerate_data()
+    
+    def _regenerate_data(self):
+        """Regenerate data based on current curriculum alignment."""
+        np.random.seed(self.seed + hash(f"{self.current_min_length}_{self.current_max_length}") % 10000)
+        
+        print(f"Regenerating eval data: sequence lengths {self.current_min_length}-{self.current_max_length}")
+        
+        self.data = []
+        
+        with tqdm(total=self.len, desc=f"Eval generation (len={self.current_min_length}-{self.current_max_length})") as pbar:
+            batch_size = 100
+            for start_idx in range(0, self.len, batch_size):
+                end_idx = min(start_idx + batch_size, self.len)
+                batch_length = end_idx - start_idx
+                
+                raw_batch = self._generate_aligned_batch(batch_length)
+                
+                for initial_state, move_sequence, final_state in raw_batch:
+                    initial_tensor = np.array([VOCAB[COLOR_MAP[face]] for face in initial_state.split(" ")])
+                    move_tensors = np.array([VOCAB[move] for move in move_sequence])
+                    final_tensor = np.array([VOCAB[COLOR_MAP[face]] for face in final_state.split(" ")])
+                    
+                    self.data.append((
+                        torch.tensor(initial_tensor, dtype=torch.long),
+                        torch.tensor(move_tensors, dtype=torch.long),
+                        torch.tensor(final_tensor, dtype=torch.long)
+                    ))
+                
+                pbar.update(batch_length)
+    
+    def _generate_aligned_batch(self, batch_size: int):
+        """Generate batch aligned with current curriculum level."""
+        from cuber.cuber import Cube
+        from data_generation.cube_state_gen import generate_random_scramble
+        
+        batch_data = []
+        
+        for _ in range(batch_size):
+            # Match the enhanced curriculum distribution with knowledge retention
+            seq_length = self._sample_eval_sequence_length()
+            
+            # Generate initial state
+            initial_scramble_length = np.random.randint(5, 15)
+            initial_scramble = generate_random_scramble(initial_scramble_length)
+            
+            cube = Cube()
+            cube.turn(initial_scramble)
+            initial_state = cube.get_faces_str("ULFRBD")
+            
+            # Generate move sequence (back to fast generation)
+            move_sequence = []
+            for _ in range(seq_length):
+                move = np.random.choice(self.move_tokens)
+                move_sequence.append(move)
+                cube.turn(move)
+            
+            final_state = cube.get_faces_str("ULFRBD")
+            batch_data.append((initial_state, move_sequence, final_state))
+        
+        return batch_data
+    
+    def _sample_eval_sequence_length(self):
+        """
+        Sample sequence length for evaluation to match training distribution.
+        Tests all difficulties learned so far with proper weighting.
+        """
+        if self.current_max_length == 1:
+            return 1
+        
+        rand_val = np.random.random()
+        
+        if rand_val < 0.4:
+            # 40% current max difficulty
+            return self.current_max_length
+        elif rand_val < 0.7:
+            # 30% immediate previous difficulties
+            if self.current_max_length >= 2:
+                lower_bound = max(1, self.current_max_length - 2)
+                upper_bound = self.current_max_length
+                return np.random.randint(lower_bound, upper_bound)
+            else:
+                return 1
+        else:
+            # 30% uniform distribution over all learned difficulties
+            return np.random.randint(1, self.current_max_length + 1)
+    
+    def align_with_curriculum(self, train_dataset):
+        """
+        Align this eval dataset with the current curriculum level.
+        
+        Args:
+            train_dataset: The curriculum training dataset to align with
+        """
+        if hasattr(train_dataset, 'get_current_curriculum_range'):
+            new_min, new_max = train_dataset.get_current_curriculum_range()
+            
+            if new_min != self.current_min_length or new_max != self.current_max_length:
+                self.current_min_length = new_min
+                self.current_max_length = new_max
+                self._regenerate_data()
+                return True
+        return False
+    
+    def __len__(self):
+        return self.len
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
+    
+    def get_max_sequence_length(self):
+        """Get the current maximum sequence length."""
+        return self.current_max_length
 
 class HybridDataset(Dataset):
     """
