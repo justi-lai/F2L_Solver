@@ -1,13 +1,13 @@
+import os
+import sys
+import copy
+import heapq
+import random
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-import argparse
-import os
-import sys
 from tqdm import tqdm
-import random
-import copy
-import heapq
 
 # Add path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -89,7 +89,7 @@ def beam_search_solve(model, device, beam_width=5, max_steps=150):
         # Expand each node
         for node in beam:
             if node.finished:
-                candidates.append(node) # Keep finished nodes? Usually we remove them to "done" list.
+                candidates.append(node) 
                 continue
                 
             # Prepare Input
@@ -116,7 +116,7 @@ def beam_search_solve(model, device, beam_width=5, max_steps=150):
                     continue
                 if token_id == 1: # EOS -> Finished
                     finished_node = BeamNode(
-                        cube=node.cube, # State doesn't change on EOS
+                        cube=node.cube, 
                         history_string=node.history_string,
                         states_history=node.states_history,
                         score=node.score + token_score,

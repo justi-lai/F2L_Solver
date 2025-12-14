@@ -1,7 +1,7 @@
-import torch
-import sys
 import os
+import sys
 import random
+import torch
 
 # Add PyCube-Solver to path
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "PyCube-Solver"))
@@ -47,7 +47,6 @@ class CubeGenerator:
         self.vocab_size = idx
         
     def get_token_id(self, move_str):
-        # Handle '2' -> Should be handled by splitter
         return self.token_to_id.get(move_str, None)
 
     def _process_moves_string(self, moves_str):
@@ -189,7 +188,7 @@ if __name__ == "__main__":
     print(f"Vocab Size: {gen.vocab_size}")
     
     print("\n--- Generating Standard Solve ---")
-    states, actions = gen.generate_solve(5) # Short scramble
+    states, actions = gen.generate_solve(5) 
     print(f"Trajectory Length: {len(actions)}")
     print(f"First 5 Actions: {[gen.id_to_token[a] for a in actions[:5]]}")
     

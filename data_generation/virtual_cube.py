@@ -1,7 +1,7 @@
+import os
+import sys
 import torch
 import numpy as np
-import sys
-import os
 
 # Add PyCube-Solver to path
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "PyCube-Solver"))
@@ -77,10 +77,6 @@ class VirtualCube:
             ((self.D, 2, 2), (self.B, 2, 0), (self.R, 2, 2)),
         ]
         
-        # Ordered list of pieces we are looking for (Target Pieces)
-        # We use indices compatible with the slots for simplicity
-        # i.e. Target Piece 0 is the piece that *belongs* in Edge Slot 0 (UF).
-        
     def get_centers(self):
         """
         Returns the current colors of the centers of the 6 faces.
@@ -107,13 +103,11 @@ class VirtualCube:
         
         # Initialize tensor
         # 20 rows (pieces), 24 cols (positions)
-        # Note: 24 is enough for both edges (12*2=24) and corners (8*3=24)
         tensor = torch.zeros(20, 24)
         
         # --- Handle Edges ---
         for piece_idx, target_slot in enumerate(self.edge_slots):
             # 1. Define Target Colors for this piece (in Primary, Secondary order)
-            # The piece that belongs in target_slot has colors of the centers of the target_slot faces
             target_c1 = centers[target_slot[0][0]]
             target_c2 = centers[target_slot[1][0]]
             
@@ -165,27 +159,10 @@ class VirtualCube:
                 
                 if current_set == target_set:
                     # Found the piece! Now determine orientation.
-                    # Orientation 0: c1 == target_c1
-                    # Orientation 1: c1 == target_c3 (Clockwise rotation of piece in slot? Or twisted?)
-                    # Let's stick to standard definition:
-                    # If Primary Face (c1) holds Target Primary (target_c1) -> 0
-                    # If Primary Face (c1) holds Target Secondary (target_c2) -> ?
-                    # If Primary Face (c1) holds Target Tertiary (target_c3) -> ?
-                    
-                    # Corner orientation rules are tricky.
-                    # Standard: 0=Correct, 1=Twisted CW, 2=Twisted CCW (Twisted relative to U/D).
-                    # Here, "Primary" faces are U and D (indices 4, 5) for all corners EXCEPT maybe...
-                    # Let's look at my slot definitions.
-                    # UFR: Primary U. DRF: Primary D.
-                    # So Primary is always U or D.
-                    
                     if c1 == target_c1:
                         orientation = 0
-                    elif c1 == target_c2: # Primary face holds secondary color (e.g. U face has F color) -> Twisted 
-                        # UFR piece (U,F,R colors). At slot UFR.
-                        # c1 is on U-face.
-                        # If c1 is F-color. Then U-color must be elsewhere.
-                        orientation = 1 # Arbitrary mapping, must be consistent
+                    elif c1 == target_c2: 
+                        orientation = 1 
                     elif c1 == target_c3:
                         orientation = 2
                     else:
@@ -219,7 +196,6 @@ if __name__ == "__main__":
     print("Shape:", t.shape)
     
     # Verify Solved State (Should be diagonal-ish)
-    expected_sum = 20.0
     actual_sum = t.sum().item()
     print(f"Sum: {actual_sum} (Expected 20.0)")
     assert actual_sum == 20.0
@@ -227,22 +203,17 @@ if __name__ == "__main__":
     if t[0, 0] == 1: print("Piece UF Correct")
     else: print("Piece UF Incorrect")
     
-    # Store solved tensor for comparison
     solved_tensor = t.clone()
 
     # --- Test 1: Rotation Invariance ---
     print("\n--- Test 1: Rotation Invariance (y move) ---")
-    # Rotate cube around y axis. The relative state should NOT change.
     c.doMoves("y")
     t_rot = vc.get_one_hot_tensor()
     
-    # Check equality
     if torch.equal(t_rot, solved_tensor):
         print("PASS: Tensor unchanged after rotation (Relative view works).")
     else:
         print("FAIL: Tensor changed after rotation!")
-        diff = (t_rot - solved_tensor).abs().sum().item()
-        print(f"Difference magnitude: {diff}")
         
     # Reset
     c = Cube()
@@ -250,7 +221,7 @@ if __name__ == "__main__":
 
     # --- Test 2: Multi-move Scramble ---
     print("\n--- Test 2: Multi-move Scramble (R U R' U') ---")
-    scramble = "RURPUP" # Note: PyCube uses RP for R', UP for U'. No spaces allowed by helper.isValid!
+    scramble = "RURPUP" 
     c.doMoves(scramble)
     t_scramble = vc.get_one_hot_tensor()
     

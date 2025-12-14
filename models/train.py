@@ -1,12 +1,12 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-import argparse
 import os
 import sys
 import glob
 import random
+import argparse
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 # Add path
@@ -63,7 +63,6 @@ def train(args):
         
         # Pbar (estimate length)
         # Note: IterableDataset length is just estimate. 
-        # Tqdm might blow past total if estimation is wrong, but that's fine.
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         
         for batch_states, batch_actions, batch_mask in pbar:
@@ -95,7 +94,7 @@ def train(args):
             batch_acc = correct.sum().item() / mask.sum().item() if mask.sum().item() > 0 else 0
             pbar.set_postfix({'loss': loss.item(), 'acc': batch_acc})
             
-        avg_train_loss = train_loss / len(pbar) # Use pbar iteration count
+        avg_train_loss = train_loss / len(pbar) 
         train_acc = train_correct / train_total if train_total > 0 else 0
         
         # Validation

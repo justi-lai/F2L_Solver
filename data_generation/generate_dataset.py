@@ -1,10 +1,10 @@
-import torch
 import os
-import tqdm
 import sys
 import random
 import argparse
 from multiprocessing import Pool, cpu_count, Manager
+import torch
+import tqdm
 
 # Add path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

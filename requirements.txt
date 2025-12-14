@@ -1,6 +1,6 @@
-beautifulsoup4
 torch
 numpy
-pandas
-cuber
 tqdm
+mamba_ssm
+beautifulsoup4
+requests

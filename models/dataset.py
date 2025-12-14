@@ -1,8 +1,8 @@
-import torch
-from torch.utils.data import IterableDataset, get_worker_info
 import os
 import glob
 import random
+import torch
+from torch.utils.data import IterableDataset, get_worker_info
 
 class CubeDataset(IterableDataset):
     """
@@ -39,14 +39,10 @@ class CubeDataset(IterableDataset):
         if worker_info is None:
             my_files = self.files
         else:
-            # Simple splitting: worker 0 gets files [0, N, 2N...], worker 1 gets [1, N+1...]?
-            # Or interleaved?
-            # Interleaved is simpler:
+            # Interleaved splitting
             my_files = [f for i, f in enumerate(self.files) if i % worker_info.num_workers == worker_info.id]
             
         # Shuffle file order (chunk shuffling)
-        # We perform shallow copy to not affect other epochs if persistent? 
-        # Actually __iter__ is called new each time.
         random.shuffle(my_files)
         
         for file_path in my_files:
