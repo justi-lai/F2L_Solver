@@ -4,14 +4,13 @@ from helper import getScramble
 
 cb = Cube()
 
-# scramble = getScramble(10)
-scramble = "y"
+scramble = getScramble(10)
 print("Scramble:", scramble)
 cb.doMoves(scramble)
 print(cb)
 
 solver = Solver(cb)
-solver.solveCube(optimize=True)
+solver.solveCube(optimize=False)
 
 moves = solver.getMoves(decorated=True)
 print(moves)

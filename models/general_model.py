@@ -71,7 +71,7 @@ class CubeSolver(nn.Module):
         d_model=512,        # Latent dimension
         n_mamba_layers=8,   # Depth of backbone
         trm_loops=4,        # Depth of recursive eye
-        vocab_size=21       # 12 Moves + 6 Rotations + 3 Middle
+        vocab_size=38       # 12 Moves + 6 Rotations + 3 Middle + 12 Wide + 2 Special
     ):
         super().__init__()
         
@@ -116,6 +116,30 @@ class CubeSolver(nn.Module):
         # Predict
         logits = self.head(x)
         return logits
+
+    def generate_move(self, current_input, inference_params=None):
+        """
+        Generate a single move prediction given the current input sequence.
+        
+        Args:
+            current_input (torch.Tensor): Tensor of shape [Batch, Seq_Len, 480]
+                                          representing the history of cube states.
+            inference_params (Any): Optional params for Mamba caching (not yet implementing full cache for simplicity).
+            
+        Returns:
+            torch.Tensor: Predicted token ID [Batch]
+        """
+        # Forward pass
+        logits = self.forward(current_input) 
+        # Logits shape: [Batch, Seq_Len, Vocab]
+        
+        # We only care about the last token's prediction
+        last_logits = logits[:, -1, :] # [Batch, Vocab]
+        
+        # Greedy decoding (argmax)
+        predicted_id = torch.argmax(last_logits, dim=-1)
+        
+        return predicted_id
 
 # --- Usage Example ---
 if __name__ == "__main__":
